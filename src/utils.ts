@@ -5,6 +5,7 @@ const execAsync = promisify(exec);
 
 export interface SearchResult {
   projectId: string;
+  projectName?: string;
   resourceType: "forwarding-rules" | "addresses" | "instances" | "routers";
   name: string;
   region?: string;
@@ -26,7 +27,7 @@ export interface SearchResult {
 }
 
 export type GcloudStatusType =
-  | { type: "success"; message: string }
+  | { type: "success"; message: string; account?: string }
   | { type: "loading"; message: string }
   | {
       type: "error";
@@ -133,13 +134,39 @@ export async function checkGcloudStatus(): Promise<GcloudStatusType> {
     };
   }
 
-  // 2. Try to list projects to verify auth
+  // 2. Try to list projects and get auth info
   try {
-    await getGCPProjects();
-    return { type: "success", message: "Connected" };
+    const gcloud = await getGcloudCommand();
+
+    // Check auth and get active account
+    const { stdout } = await execAsync(
+      `"${gcloud}" auth list --filter=status:ACTIVE --format="json(account)"`,
+    );
+    const authList = JSON.parse(stdout);
+    const activeAccount = authList[0]?.account;
+
+    if (!activeAccount) {
+      return {
+        type: "error",
+        message: "Not logged in",
+        errorType: "login_failed",
+      };
+    }
+
+    // Verify project access by listing one
+    await execAsync(`"${gcloud}" projects list --limit=1 --format="none"`);
+
+    return {
+      type: "success",
+      message: "Connected",
+      account: activeAccount,
+    };
   } catch (error) {
     const errorStr = String(error);
-    if (errorStr.includes("gcloud auth login")) {
+    if (
+      errorStr.includes("gcloud auth login") ||
+      errorStr.includes("Not logged in")
+    ) {
       return {
         type: "error",
         message: "Not logged in",
@@ -166,6 +193,7 @@ function getNameFromUrl(url: string): string {
  */
 export async function searchIPInProject(
   projectId: string,
+  projectName: string,
   ip: string,
 ): Promise<SearchResult[]> {
   const gcloud = await getGcloudCommand();
@@ -232,6 +260,7 @@ export async function searchIPInProject(
               // 1. Add the Instance Result
               instanceResults.push({
                 projectId,
+                projectName,
                 resourceType: "instances",
                 name: inst.name,
                 zone: inst.zone ? getNameFromUrl(inst.zone) : undefined,
@@ -254,6 +283,7 @@ export async function searchIPInProject(
               if (ip) {
                 instanceResults.push({
                   projectId,
+                  projectName,
                   resourceType: "addresses",
                   name: "-", // Use "-" as name for ephemeral per user request
                   region: inst.zone
@@ -308,6 +338,7 @@ export async function searchIPInProject(
 
               const addressResult: SearchResult = {
                 projectId,
+                projectName,
                 resourceType: "addresses",
                 name: displayName,
                 region: addr.region ? getNameFromUrl(addr.region) : "global",
@@ -344,6 +375,7 @@ export async function searchIPInProject(
 
                     addressResults.push({
                       projectId,
+                      projectName,
                       resourceType: "routers",
                       name: routerName,
                       region: routerRegion,
@@ -386,6 +418,7 @@ export async function searchIPInProject(
             }) => {
               fwResults.push({
                 projectId,
+                projectName,
                 resourceType: "forwarding-rules",
                 name: rule.name,
                 region: rule.region ? getNameFromUrl(rule.region) : "global",
@@ -401,6 +434,7 @@ export async function searchIPInProject(
               if (rule.IPAddress) {
                 fwResults.push({
                   projectId,
+                  projectName,
                   resourceType: "addresses",
                   name: "-", // Synthetic name
                   region: rule.region ? getNameFromUrl(rule.region) : "global",

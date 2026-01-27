@@ -77,37 +77,34 @@ function SearchCommand() {
     })();
   }, []);
 
-  // Save history helper
-  const saveHistory = useCallback(async (newHistory: HistoryItem[]) => {
-    setHistory(newHistory);
-    await LocalStorage.setItem("search-history", JSON.stringify(newHistory));
-  }, []);
-
   // Add result to history
   const addToHistory = useCallback(
     async (ip: string, results: SearchResult[]) => {
-      // Remove existing entry for this IP if any
-      const filtered = history.filter((h) => h.ip !== ip);
-      const newItem: HistoryItem = {
-        ip,
-        results,
-        timestamp: Date.now(),
-        projectCount: new Set(results.map((r) => r.projectId)).size,
-      };
-      const newHistory = [newItem, ...filtered].slice(0, 50); // Keep last 50
-      await saveHistory(newHistory);
+      setHistory((prev) => {
+        // Remove existing entry for this IP if any
+        const filtered = prev.filter((h) => h.ip !== ip);
+        const newItem: HistoryItem = {
+          ip,
+          results,
+          timestamp: Date.now(),
+          projectCount: new Set(results.map((r) => r.projectId)).size,
+        };
+        const newHistory = [newItem, ...filtered].slice(0, 50); // Keep last 50
+        LocalStorage.setItem("search-history", JSON.stringify(newHistory));
+        return newHistory;
+      });
     },
-    [history, saveHistory],
+    [],
   );
 
   // Remove from history
-  const removeFromHistory = useCallback(
-    async (ip: string) => {
-      const newHistory = history.filter((h) => h.ip !== ip);
-      await saveHistory(newHistory);
-    },
-    [history, saveHistory],
-  );
+  const removeFromHistory = useCallback(async (ip: string) => {
+    setHistory((prev) => {
+      const newHistory = prev.filter((h) => h.ip !== ip);
+      LocalStorage.setItem("search-history", JSON.stringify(newHistory));
+      return newHistory;
+    });
+  }, []);
 
   // Filter history
   const filteredHistory = useMemo(() => {
@@ -138,6 +135,7 @@ function SearchCommand() {
         ip={ip}
         onSaveToHistory={addToHistory}
         onSearchAgain={startSearch}
+        onRemoveFromHistory={removeFromHistory}
       />,
     );
   };
@@ -215,7 +213,7 @@ function SearchCommand() {
       searchText={searchText}
       navigationTitle={
         gcloudStatus.type === "success"
-          ? `Search GCP IP Address | Status：✅`
+          ? `Search GCP IP Address | Status：✅ ${gcloudStatus.account ? `(${gcloudStatus.account})` : ""}`
           : gcloudStatus.type === "error"
             ? `Search GCP IP Address | Status：🚫 (${gcloudStatus.message})`
             : `Search GCP IP Address | Status：Checking...`
@@ -241,52 +239,65 @@ function SearchCommand() {
 
       {!showWelcome && (
         <List.Section title="Recent Searches">
-          {filteredHistory.map((item) => (
-            <List.Item
-              key={item.ip}
-              title={item.ip}
-              subtitle={`${item.results.length} ${item.results.length === 1 ? "resource" : "resources"} found in ${item.projectCount} projects`}
-              accessories={[
-                { date: new Date(item.timestamp), tooltip: "Last searched" },
-              ]}
-              icon={Icon.Clock}
-              actions={
-                <ActionPanel>
-                  <Action
-                    title="View Results"
-                    icon={Icon.Eye}
-                    onAction={() => {
-                      // Check status before viewing
-                      if (gcloudStatus.type === "error") {
-                        return;
-                      }
-                      // Push with existing results to avoid re-searching
-                      push(
-                        <ResultsView
-                          ip={item.ip}
-                          initialResults={item.results}
-                          onSaveToHistory={addToHistory}
-                          onSearchAgain={startSearch}
-                        />,
-                      );
-                    }}
-                  />
-                  <Action
-                    title="Search Again"
-                    icon={Icon.ArrowClockwise}
-                    onAction={() => startSearch(item.ip)}
-                  />
-                  <Action
-                    title="Remove from History"
-                    icon={Icon.Trash}
-                    style={Action.Style.Destructive}
-                    onAction={() => removeFromHistory(item.ip)}
-                    shortcut={{ modifiers: ["ctrl"], key: "x" }}
-                  />
-                </ActionPanel>
-              }
-            />
-          ))}
+          {filteredHistory.map((item) => {
+            const projectInfos = Array.from(
+              new Set(
+                item.results.map(
+                  (r) => `${r.projectName || r.projectId} (${r.projectId})`,
+                ),
+              ),
+            ).join(", ");
+
+            return (
+              <List.Item
+                key={item.ip}
+                title={item.ip}
+                subtitle={`${item.results.length} ${
+                  item.results.length === 1 ? "resource" : "resources"
+                } found in ${projectInfos}`}
+                accessories={[
+                  { date: new Date(item.timestamp), tooltip: "Last searched" },
+                ]}
+                icon={Icon.Clock}
+                actions={
+                  <ActionPanel>
+                    <Action
+                      title="View Results"
+                      icon={Icon.Eye}
+                      onAction={() => {
+                        // Check status before viewing
+                        if (gcloudStatus.type === "error") {
+                          return;
+                        }
+                        // Push with existing results to avoid re-searching
+                        push(
+                          <ResultsView
+                            ip={item.ip}
+                            initialResults={item.results}
+                            onSaveToHistory={addToHistory}
+                            onSearchAgain={startSearch}
+                            onRemoveFromHistory={removeFromHistory}
+                          />,
+                        );
+                      }}
+                    />
+                    <Action
+                      title="Search Again"
+                      icon={Icon.ArrowClockwise}
+                      onAction={() => startSearch(item.ip)}
+                    />
+                    <Action
+                      title="Remove from History"
+                      icon={Icon.Trash}
+                      style={Action.Style.Destructive}
+                      onAction={() => removeFromHistory(item.ip)}
+                      shortcut={{ modifiers: ["ctrl"], key: "x" }}
+                    />
+                  </ActionPanel>
+                }
+              />
+            );
+          })}
         </List.Section>
       )}
 
@@ -310,6 +321,7 @@ interface ResultsViewProps {
   initialResults?: SearchResult[];
   onSaveToHistory: (ip: string, results: SearchResult[]) => Promise<void>;
   onSearchAgain: (ip: string) => Promise<void>;
+  onRemoveFromHistory: (ip: string) => Promise<void>;
 }
 
 function ResultsView({
@@ -317,6 +329,7 @@ function ResultsView({
   initialResults,
   onSaveToHistory,
   onSearchAgain,
+  onRemoveFromHistory,
 }: ResultsViewProps) {
   const [results, setResults] = useState<SearchResult[]>(initialResults || []);
   const [isLoading, setIsLoading] = useState(!initialResults);
@@ -361,10 +374,14 @@ function ResultsView({
 
         if (projects.length === 0) {
           if (isMounted) setIsLoading(false);
+
+          // Remove from history as the context (account) has changed and no projects are accessible
+          await onRemoveFromHistory(ip);
+
           await showToast({
             style: Toast.Style.Failure,
             title: "No GCP projects found",
-            message: "Check your gcloud auth",
+            message: "Check your gcloud auth. Removed from history.",
           });
           return;
         }
@@ -383,7 +400,7 @@ function ResultsView({
           const batchResults = await Promise.all(
             batch.map(async (project) => {
               try {
-                return await searchIPInProject(project.id, ip);
+                return await searchIPInProject(project.id, project.name, ip);
               } catch {
                 return [];
               } finally {
@@ -415,10 +432,13 @@ function ResultsView({
         if (searchResults.length > 0) {
           await onSaveToHistory(ip, searchResults);
         } else {
+          // If no results found, remove from history (since it might have been released)
+          await onRemoveFromHistory(ip);
+
           await showToast({
             style: Toast.Style.Failure,
             title: "No Resources Found",
-            message: `IP ${ip} was not found in any of your GCP projects.`,
+            message: `IP ${ip} was not found. Removed from history.`,
           });
         }
       } catch (error) {
