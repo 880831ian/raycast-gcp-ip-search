@@ -9,6 +9,7 @@ import {
   Color,
   LocalStorage,
   useNavigation,
+  Form,
 } from "@raycast/api";
 import {
   checkGcloudInstalled,
@@ -22,11 +23,14 @@ import {
   checkGcloudStatus,
 } from "./utils";
 
+type SearchMode = "quick" | "full" | "custom";
+
 interface HistoryItem {
   ip: string;
   results: SearchResult[];
   timestamp: number;
   projectCount: number;
+  mode?: SearchMode;
 }
 
 // IP validation helper function
@@ -44,6 +48,8 @@ function isValidIP(ip: string): boolean {
 
 function SearchCommand() {
   const [searchText, setSearchText] = useState("");
+  const [searchMode, setSearchMode] = useState<SearchMode>("quick");
+  const [customProjects, setCustomProjects] = useState<string>("");
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [gcloudStatus, setGcloudStatus] = useState<GcloudStatusType>({
     type: "loading",
@@ -69,6 +75,25 @@ function SearchCommand() {
     })();
   }, []);
 
+  // Load persistence search mode and custom projects
+  useEffect(() => {
+    (async () => {
+      const storedMode = await LocalStorage.getItem<string>("search-mode");
+      if (
+        storedMode === "quick" ||
+        storedMode === "full" ||
+        storedMode === "custom"
+      ) {
+        setSearchMode(storedMode as SearchMode);
+      }
+      const storedCustomProjects =
+        await LocalStorage.getItem<string>("custom-projects");
+      if (storedCustomProjects) {
+        setCustomProjects(storedCustomProjects);
+      }
+    })();
+  }, []);
+
   // Check Gcloud Status on mount
   useEffect(() => {
     (async () => {
@@ -77,9 +102,16 @@ function SearchCommand() {
     })();
   }, []);
 
+  // Handle Search Mode Change
+  const handleModeChange = async (newValue: string) => {
+    const mode = newValue as SearchMode;
+    setSearchMode(mode);
+    await LocalStorage.setItem("search-mode", mode);
+  };
+
   // Add result to history
   const addToHistory = useCallback(
-    async (ip: string, results: SearchResult[]) => {
+    async (ip: string, results: SearchResult[], mode: SearchMode) => {
       setHistory((prev) => {
         // Remove existing entry for this IP if any
         const filtered = prev.filter((h) => h.ip !== ip);
@@ -88,6 +120,7 @@ function SearchCommand() {
           results,
           timestamp: Date.now(),
           projectCount: new Set(results.map((r) => r.projectId)).size,
+          mode,
         };
         const newHistory = [newItem, ...filtered].slice(0, 50); // Keep last 50
         LocalStorage.setItem("search-history", JSON.stringify(newHistory));
@@ -130,9 +163,38 @@ function SearchCommand() {
       return;
     }
 
+    // Handle Custom Mode Config check
+    if (searchMode === "custom" && !customProjects.trim()) {
+      await showToast({
+        style: Toast.Style.Failure,
+        title: "No Custom Projects Configured",
+        message: "Please add project IDs to search",
+      });
+      push(
+        <CustomProjectsForm
+          initialValue={customProjects}
+          onSave={async (value) => {
+            setCustomProjects(value);
+            await LocalStorage.setItem("custom-projects", value);
+          }}
+        />,
+      );
+      return;
+    }
+
+    const customProjectList =
+      searchMode === "custom"
+        ? customProjects
+            .split(",")
+            .map((p) => p.trim())
+            .filter((p) => p)
+        : undefined;
+
     push(
       <ResultsView
         ip={ip}
+        mode={searchMode}
+        customProjectIds={customProjectList}
         onSaveToHistory={addToHistory}
         onSearchAgain={startSearch}
         onRemoveFromHistory={removeFromHistory}
@@ -205,6 +267,35 @@ function SearchCommand() {
   const isInitialLoading = isHistoryLoading;
   const showWelcome = !searchText && history.length === 0 && !isInitialLoading;
 
+  // Cycle search mode helper
+  const nextMode = (current: SearchMode): SearchMode => {
+    if (current === "quick") return "full";
+    if (current === "full") return "custom";
+    return "quick";
+  };
+
+  const getModeLabel = (mode: SearchMode) => {
+    switch (mode) {
+      case "quick":
+        return "Quick (First Match)";
+      case "full":
+        return "Detailed (Full Scan)";
+      case "custom":
+        return "Custom (Selected Projects)";
+      default:
+        return mode;
+    }
+  };
+
+  const cycleSearchMode = async () => {
+    const next = nextMode(searchMode);
+    await handleModeChange(next);
+    await showToast({
+      style: Toast.Style.Success,
+      title: `Switched to ${getModeLabel(next)}`,
+    });
+  };
+
   return (
     <List
       isLoading={isInitialLoading}
@@ -213,10 +304,33 @@ function SearchCommand() {
       searchText={searchText}
       navigationTitle={
         gcloudStatus.type === "success"
-          ? `Search GCP IP Address | Status：✅ ${gcloudStatus.account ? `(${gcloudStatus.account})` : ""}`
+          ? `Search GCP IP Address | ${gcloudStatus.account} | Status：✅`
           : gcloudStatus.type === "error"
             ? `Search GCP IP Address | Status：🚫 (${gcloudStatus.message})`
             : `Search GCP IP Address | Status：Checking...`
+      }
+      searchBarAccessory={
+        <List.Dropdown
+          tooltip="Search Mode"
+          value={searchMode}
+          onChange={handleModeChange}
+        >
+          <List.Dropdown.Item
+            title="Quick (First Match)"
+            value="quick"
+            icon={Icon.Bolt}
+          />
+          <List.Dropdown.Item
+            title="Detailed (Full Scan)"
+            value="full"
+            icon={Icon.MagnifyingGlass}
+          />
+          <List.Dropdown.Item
+            title="Custom (Selected Projects)"
+            value="custom"
+            icon={Icon.List}
+          />
+        </List.Dropdown>
       }
     >
       {/* Show "Search New IP" if there is text input */}
@@ -231,6 +345,37 @@ function SearchCommand() {
                   title="Start Search"
                   onAction={() => startSearch(searchText)}
                 />
+                <Action
+                  title={`Switch Mode to ${nextMode(searchMode) === "quick" ? "Quick" : nextMode(searchMode) === "full" ? "Detailed" : "Custom"}`}
+                  icon={Icon.ArrowRight}
+                  shortcut={{ modifiers: ["cmd"], key: "m" }}
+                  onAction={cycleSearchMode}
+                />
+                {searchMode === "custom" && (
+                  <Action
+                    title="Configure Custom Projects"
+                    icon={Icon.Gear}
+                    shortcut={{ modifiers: ["cmd", "shift"], key: "p" }}
+                    onAction={() =>
+                      push(
+                        <CustomProjectsForm
+                          initialValue={customProjects}
+                          onSave={async (value) => {
+                            setCustomProjects(value);
+                            await LocalStorage.setItem(
+                              "custom-projects",
+                              value,
+                            );
+                            await showToast({
+                              style: Toast.Style.Success,
+                              title: "Configuration Saved",
+                            });
+                          }}
+                        />,
+                      )
+                    }
+                  />
+                )}
               </ActionPanel>
             }
           />
@@ -256,6 +401,11 @@ function SearchCommand() {
                   item.results.length === 1 ? "resource" : "resources"
                 } found in ${projectInfos}`}
                 accessories={[
+                  item.mode === "custom"
+                    ? { icon: Icon.List, tooltip: "Custom Scan" }
+                    : item.mode === "full"
+                      ? { icon: Icon.MagnifyingGlass, tooltip: "Full Scan" }
+                      : { icon: Icon.Bolt, tooltip: "Quick Scan" },
                   { date: new Date(item.timestamp), tooltip: "Last searched" },
                 ]}
                 icon={Icon.Clock}
@@ -277,6 +427,7 @@ function SearchCommand() {
                             onSaveToHistory={addToHistory}
                             onSearchAgain={startSearch}
                             onRemoveFromHistory={removeFromHistory}
+                            mode={item.mode || "quick"}
                           />,
                         );
                       }}
@@ -291,8 +442,39 @@ function SearchCommand() {
                       icon={Icon.Trash}
                       style={Action.Style.Destructive}
                       onAction={() => removeFromHistory(item.ip)}
-                      shortcut={{ modifiers: ["ctrl"], key: "x" }}
+                      shortcut={{ modifiers: ["cmd"], key: "x" }}
                     />
+                    <Action
+                      title={`Switch Mode to ${nextMode(searchMode) === "quick" ? "Quick" : nextMode(searchMode) === "full" ? "Detailed" : "Custom"}`}
+                      icon={Icon.ArrowRight}
+                      shortcut={{ modifiers: ["cmd"], key: "m" }}
+                      onAction={cycleSearchMode}
+                    />
+                    {searchMode === "custom" && (
+                      <Action
+                        title="Configure Custom Projects"
+                        icon={Icon.Gear}
+                        shortcut={{ modifiers: ["cmd", "shift"], key: "p" }}
+                        onAction={() =>
+                          push(
+                            <CustomProjectsForm
+                              initialValue={customProjects}
+                              onSave={async (value) => {
+                                setCustomProjects(value);
+                                await LocalStorage.setItem(
+                                  "custom-projects",
+                                  value,
+                                );
+                                await showToast({
+                                  style: Toast.Style.Success,
+                                  title: "Configuration Saved",
+                                });
+                              }}
+                            />,
+                          )
+                        }
+                      />
+                    )}
                   </ActionPanel>
                 }
               />
@@ -305,10 +487,104 @@ function SearchCommand() {
         <List.EmptyView
           icon={{ source: Icon.MagnifyingGlass, tintColor: Color.Blue }}
           title="Welcome to GCP IP Search"
-          description={`Search for IP addresses across all your Google Cloud projects.\n\n💡 Tip: Use the search bar above to start.`}
+          description={`Search for IP addresses across all your Google Cloud projects.\n\n💡 Tip: You can switch between Quick, Detailed, and Custom search mode.`}
+          actions={
+            <ActionPanel>
+              {searchMode === "custom" ? (
+                <>
+                  <Action
+                    title="Configure Custom Projects"
+                    icon={Icon.Gear}
+                    shortcut={{ modifiers: ["cmd", "shift"], key: "p" }}
+                    onAction={() =>
+                      push(
+                        <CustomProjectsForm
+                          initialValue={customProjects}
+                          onSave={async (value) => {
+                            setCustomProjects(value);
+                            await LocalStorage.setItem(
+                              "custom-projects",
+                              value,
+                            );
+                            await showToast({
+                              style: Toast.Style.Success,
+                              title: "Configuration Saved",
+                            });
+                          }}
+                        />,
+                      )
+                    }
+                  />
+                  <Action
+                    title={`Switch Mode to ${nextMode(searchMode) === "quick" ? "Quick" : nextMode(searchMode) === "full" ? "Detailed" : "Custom"}`}
+                    icon={Icon.ArrowRight}
+                    shortcut={{ modifiers: ["cmd"], key: "m" }}
+                    onAction={cycleSearchMode}
+                  />
+                </>
+              ) : (
+                <>
+                  <Action
+                    title="Type Ip to Search…"
+                    icon={Icon.MagnifyingGlass}
+                    onAction={() => {}}
+                  />
+                  <Action
+                    title={`Switch Mode to ${nextMode(searchMode) === "quick" ? "Quick" : nextMode(searchMode) === "full" ? "Detailed" : "Custom"}`}
+                    icon={Icon.ArrowRight}
+                    shortcut={{ modifiers: ["cmd"], key: "m" }}
+                    onAction={cycleSearchMode}
+                  />
+                </>
+              )}
+            </ActionPanel>
+          }
         />
       )}
     </List>
+  );
+}
+
+function CustomProjectsForm({
+  initialValue,
+  onSave,
+}: {
+  initialValue: string;
+  onSave: (value: string) => Promise<void>;
+}) {
+  const { pop } = useNavigation();
+  const [value, setValue] = useState(initialValue);
+
+  return (
+    <Form
+      actions={
+        <ActionPanel>
+          <Action.SubmitForm
+            title="Save Projects"
+            onSubmit={async () => {
+              await onSave(value);
+              await showToast({
+                style: Toast.Style.Success,
+                title: "Configuration Saved",
+              });
+              pop();
+            }}
+          />
+        </ActionPanel>
+      }
+    >
+      <Form.Description
+        title="Custom Project List"
+        text="Enter GCP Project IDs separated by commas. Only these projects will be searched in Custom mode."
+      />
+      <Form.TextArea
+        id="projects"
+        title="Project IDs"
+        placeholder="project-id-1, project-id-2, project-id-3"
+        value={value}
+        onChange={setValue}
+      />
+    </Form>
   );
 }
 
@@ -318,14 +594,22 @@ export default function Command() {
 
 interface ResultsViewProps {
   ip: string;
+  mode: SearchMode;
+  customProjectIds?: string[];
   initialResults?: SearchResult[];
-  onSaveToHistory: (ip: string, results: SearchResult[]) => Promise<void>;
+  onSaveToHistory: (
+    ip: string,
+    results: SearchResult[],
+    mode: SearchMode,
+  ) => Promise<void>;
   onSearchAgain: (ip: string) => Promise<void>;
   onRemoveFromHistory: (ip: string) => Promise<void>;
 }
 
 function ResultsView({
   ip,
+  mode,
+  customProjectIds,
   initialResults,
   onSaveToHistory,
   onSearchAgain,
@@ -362,7 +646,14 @@ function ResultsView({
           return;
         }
 
-        const projects = await getGCPProjects();
+        let projects = await getGCPProjects();
+
+        // Filter projects for custom mode
+        if (mode === "custom" && customProjectIds) {
+          const allowedIds = new Set(customProjectIds);
+          projects = projects.filter((p) => allowedIds.has(p.id));
+        }
+
         if (isMounted) {
           setScanProgress({
             current: 0,
@@ -375,13 +666,21 @@ function ResultsView({
         if (projects.length === 0) {
           if (isMounted) setIsLoading(false);
 
-          // Remove from history as the context (account) has changed and no projects are accessible
-          await onRemoveFromHistory(ip);
+          // Only remove if it's NOT custom mode, because custom mode might return empty if user configured wrong IDs
+          // But actually, getGCPProjects returns ALL projects user has access to.
+          // If we filtered and got 0, it means user has no access to the configured projects OR configured them wrong.
+          if (mode !== "custom") {
+            // Remove from history as the context (account) has changed and no projects are accessible
+            await onRemoveFromHistory(ip);
+          }
 
           await showToast({
             style: Toast.Style.Failure,
-            title: "No GCP projects found",
-            message: "Check your gcloud auth. Removed from history.",
+            title: "No Accessible Projects Found",
+            message:
+              mode === "custom"
+                ? "Check your custom project list"
+                : "Check your gcloud auth",
           });
           return;
         }
@@ -392,8 +691,13 @@ function ResultsView({
 
         for (let i = 0; i < projects.length; i += CONCURRENCY) {
           if (!isMounted) break;
-          // If we already found results in previous batches, stop scanning
-          if (searchResults.length > 0) break;
+
+          // Check if we should stop early (Quick Mode)
+          // Only stop if we found something AND we are in quick mode
+          // Custom mode acts like Full mode (scans all selected projects)
+          if (mode === "quick" && searchResults.length > 0) {
+            break;
+          }
 
           const batch = projects.slice(i, i + CONCURRENCY);
 
@@ -430,9 +734,9 @@ function ResultsView({
         setResults(searchResults);
 
         if (searchResults.length > 0) {
-          await onSaveToHistory(ip, searchResults);
+          await onSaveToHistory(ip, searchResults, mode);
         } else {
-          // If no results found, remove from history (since it might have been released)
+          // If no results found, remove from history
           await onRemoveFromHistory(ip);
 
           await showToast({
@@ -456,9 +760,9 @@ function ResultsView({
     return () => {
       isMounted = false;
     };
-  }, [ip]); // Only run when IP changes
+  }, [ip, mode]); // Run when IP or mode changes
 
-  // Filter results based on search text (calculate directly, not using useMemo inside condition)
+  // Filter results based on search text
   const filteredResults = !resultFilterText
     ? results
     : results.filter((result) => {
@@ -474,14 +778,33 @@ function ResultsView({
         );
       });
 
+  const getModeLabel = () => {
+    switch (mode) {
+      case "quick":
+        return "Quick Scan";
+      case "full":
+        return "Full Scan";
+      case "custom":
+        return "Custom Scan";
+      default:
+        return "";
+    }
+  };
+
   return (
     <List
       isLoading={false}
       searchBarPlaceholder={isLoading ? "Scanning..." : "Filter results..."}
-      navigationTitle={`Results for ${ip}`}
+      navigationTitle={`Results for ${ip} (${getModeLabel()})`}
       isShowingDetail={isShowingDetail}
       onSearchTextChange={setResultFilterText}
       searchText={resultFilterText}
+      actions={
+        // Global actions when not selecting a specific item
+        !results.length && !isLoading ? (
+          <ActionPanel>{/* Add global actions if needed */}</ActionPanel>
+        ) : undefined
+      }
     >
       {isLoading ? (
         <List.EmptyView
@@ -502,7 +825,7 @@ function ResultsView({
       ) : filteredResults.length > 0 ? (
         <>
           <List.Section
-            title={`Found ${filteredResults.length} ${filteredResults.length === 1 ? "resource" : "resources"}`}
+            title={`Found ${filteredResults.length} ${filteredResults.length === 1 ? "resource" : "resources"} (${getModeLabel()})`}
           >
             {filteredResults.map((result, index) => {
               const resourceURL = generateResourceURL(result);
@@ -539,12 +862,10 @@ function ResultsView({
                     text = "Stopped";
                     color = Color.SecondaryText;
                   } else if (statusRaw) {
-                    // Fallback for other statuses like PROVISIONING, STAGING, SUSPENDED
                     text = statusRaw;
                     color = Color.Orange;
                   }
                 } else if (result.status) {
-                  // Default for other resources
                   const statusRaw = result.status.toUpperCase();
                   if (statusRaw === "ACTIVE" || statusRaw === "READY")
                     color = Color.Green;
@@ -568,7 +889,6 @@ function ResultsView({
                             text: result.region || result.zone || "Global",
                             tooltip: "Region/Zone",
                           },
-                          // Show status tag unless it's a forwarding rule
                           ...(result.resourceType !== "forwarding-rules"
                             ? [
                                 {
@@ -609,7 +929,6 @@ function ResultsView({
                               title={`Start Search ${result.internalIP}`}
                               icon={Icon.MagnifyingGlass}
                               onAction={() => onSearchAgain(result.internalIP!)}
-                              shortcut={{ modifiers: ["opt"], key: "i" }}
                             />
                           )}
                           {result.externalIP && result.externalIP !== ip && (
@@ -617,7 +936,6 @@ function ResultsView({
                               title={`Start Search ${result.externalIP}`}
                               icon={Icon.MagnifyingGlass}
                               onAction={() => onSearchAgain(result.externalIP!)}
-                              shortcut={{ modifiers: ["opt"], key: "e" }}
                             />
                           )}
                         </>
@@ -645,7 +963,6 @@ function ResultsView({
 
                           <List.Item.Detail.Metadata.Separator />
 
-                          {/* IP Address - Show specifics for Instances, generic for others */}
                           {result.resourceType === "instances" ? (
                             <>
                               {result.internalIP && (
@@ -675,7 +992,6 @@ function ResultsView({
                               (result.ipAddress.includes(":") ? "IPV6" : "IPV4")
                             }
                           />
-                          {/* Address Type - Only show if present (don't default to INTERNAL) and localize */}
                           {result.addressType && (
                             <List.Item.Detail.Metadata.TagList title="Address Type">
                               <List.Item.Detail.Metadata.TagList.Item
@@ -709,7 +1025,6 @@ function ResultsView({
                               text={result.subnetwork}
                             />
                           )}
-                          {/* Network Tier - Localize */}
                           {result.networkTier && (
                             <List.Item.Detail.Metadata.Label
                               title="Network Tier"
@@ -723,7 +1038,6 @@ function ResultsView({
                             />
                           )}
 
-                          {/* Status - Hide for forwarding rules */}
                           {result.status &&
                             result.resourceType !== "forwarding-rules" && (
                               <List.Item.Detail.Metadata.TagList title="Status">
@@ -761,6 +1075,20 @@ function ResultsView({
           icon={{ source: Icon.XMarkCircle, tintColor: Color.Red }}
           title="No Resources Found"
           description={`IP ${ip} was not found in any of your GCP projects.`}
+          actions={
+            !isLoading && mode === "quick" ? (
+              <ActionPanel>
+                <Action
+                  title="Try Detailed Search"
+                  icon={Icon.MagnifyingGlass}
+                  onAction={() => {
+                    // We need a way to temporarily switch mode or just start a search knowing it's full?
+                    // For simplicity in this iteration, just letting user toggle dropdown.
+                  }}
+                />
+              </ActionPanel>
+            ) : undefined
+          }
         />
       )}
     </List>

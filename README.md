@@ -6,7 +6,10 @@ A Raycast extension to quickly search for IP addresses across all your Google Cl
 
 ## Features
 
-- 🔍 **Fast Search**: Searches across all your GCP projects in parallel
+- 🔍 **Search Modes**:
+  - **Quick**: Stops after first match (Fastest)
+  - **Detailed**: Scans all projects
+  - **Custom**: Scans selected projects only
 - 📊 **Rich UI**: Beautiful list interface with detailed metadata
 - 🕒 **Search History**: Quickly access your recent searches
 - 🔄 **Recursive Search**: Easily search for internal/external IPs found in instance details
@@ -72,7 +75,9 @@ Follow the prompts to submit your extension.
 
 1. Open Raycast (⌘ + Space)
 2. Type "Search IP Address"
-3. **Welcome Screen**: If it's your first time, you'll see a welcome screen.
+3. **Welcome Screen**:
+   - **Quick / Detailed Mode**: Press `Cmd + M` to switch modes. `Enter` does nothing to prevent accidental switching.
+   - **Custom Mode**: Press `Enter` to configure your custom project list.
 4. **Search**: Enter the IP address you want to search for and press Enter.
 5. **History**: Your recent searches are saved. You can select a history item to view its results again without rescanning.
 
@@ -85,10 +90,12 @@ The extension will:
 
 ### Keyboard Shortcuts
 
-- `Enter` - Open in GCP Console
+- `Enter` - Open in GCP Console (in result view) / Configure Custom Projects (in Custom Mode Welcome view)
 - `⌘ + Enter` - Copy GCP Console URL
 - `⌘ + D` - Toggle Details View
-- `Control + X` - Remove from History
+- `⌘ + M` - Cycle Search Modes (Quick -> Detailed -> Custom)
+- `⌘ + Shift + P` - Configure Custom Projects (Only in Custom Mode)
+- `⌘ + X` - Remove from History
 
 ## What It Searches
 
@@ -158,7 +165,7 @@ gcloud projects list
 
 **Pin-Yi**
 
-- Email: 880831ian@gmail.com
+- Website: https://pin-yi.com
 
 ## License
 
