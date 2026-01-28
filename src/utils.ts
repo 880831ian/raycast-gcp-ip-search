@@ -43,6 +43,7 @@ const GCLOUD_PATHS = [
   "/usr/local/share/google-cloud-sdk/bin/gcloud", // Homebrew Intel
   "/usr/local/bin/gcloud", // Common symlink
   "/opt/homebrew/bin/gcloud", // Homebrew bin
+  "/usr/local/homebrew/bin/gcloud", // Custom Intel Homebrew
   `${process.env.HOME}/google-cloud-sdk/bin/gcloud`, // Manual install
 ];
 
