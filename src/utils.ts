@@ -304,7 +304,7 @@ export async function searchIPInProject(
           );
         }
         return instanceResults;
-      } catch (e) {
+      } catch {
         return [];
       }
     })(),
@@ -391,7 +391,7 @@ export async function searchIPInProject(
           );
         }
         return addressResults;
-      } catch (e) {
+      } catch {
         return [];
       }
     })(),
@@ -454,7 +454,7 @@ export async function searchIPInProject(
           );
         }
         return fwResults;
-      } catch (e) {
+      } catch {
         return [];
       }
     })(),
